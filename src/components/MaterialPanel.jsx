@@ -6,7 +6,7 @@ export default function MaterialPanel({ region, selectionId, onApply }) {
       <aside className="sidebar">
         <div className="sidebar-block">
           <h2>Finishes</h2>
-          <p>Hover a surface to see its outline, then click it to pick a color.</p>
+          <p>Tap or click a surface, then pick a color.</p>
         </div>
       </aside>
     )

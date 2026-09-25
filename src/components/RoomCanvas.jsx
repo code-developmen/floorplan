@@ -29,6 +29,7 @@ export default function RoomCanvas({
   useEffect(() => {
     const pane = paneRef.current
     if (!pane) return undefined
+    const widthFit = window.matchMedia('(max-width: 900px) and (min-height: 501px)')
     const measure = () => {
       const styles = getComputedStyle(pane)
       const padX = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight)
@@ -36,7 +37,9 @@ export default function RoomCanvas({
       const readout = pane.querySelector('.hover-readout')
       const readoutHeight = readout ? readout.offsetHeight + 8 : 24
       const maxW = Math.max(1, pane.clientWidth - padX - 4)
-      const maxH = Math.max(1, pane.clientHeight - padY - readoutHeight - 4)
+      const maxH = widthFit.matches
+        ? Math.max(1, Math.round(window.innerHeight * 0.72) - readoutHeight)
+        : Math.max(1, pane.clientHeight - padY - readoutHeight - 4)
       const scale = Math.min(maxW / image.width, maxH / image.height)
       const width = Math.max(1, Math.round(image.width * scale))
       const height = Math.max(1, Math.round(image.height * scale))
@@ -45,7 +48,13 @@ export default function RoomCanvas({
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(pane)
-    return () => observer.disconnect()
+    window.addEventListener('resize', measure)
+    widthFit.addEventListener('change', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+      widthFit.removeEventListener('change', measure)
+    }
   }, [image])
 
   useEffect(() => {
@@ -148,7 +157,7 @@ export default function RoomCanvas({
         ref={canvasRef}
         width={image.width}
         height={image.height}
-        aria-label="Room photo. Hover a surface, then click to choose a finish."
+        aria-label="Room photo. Tap or click a surface to choose a finish."
         style={{
           width: displaySize ? `${displaySize.width}px` : '100%',
           height: displaySize ? `${displaySize.height}px` : 'auto',
@@ -158,7 +167,7 @@ export default function RoomCanvas({
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
       />
-      <p className="hover-readout">{hoverRegion ? hoverRegion.label : 'Hover a surface'}</p>
+      <p className="hover-readout">{hoverRegion ? hoverRegion.label : 'Select a surface'}</p>
     </div>
   )
 }

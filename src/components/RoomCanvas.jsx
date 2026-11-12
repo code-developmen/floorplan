@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { findMaterial } from '../data/materials'
-import { hexToHueSat, recolorPixels, writeRecoloredPixels } from '../lib/color'
-import { clientToImagePoint, hitTestRegions, rasterizePolygon, strokePolygon } from '../lib/geometry'
+import { hexToHueSat, shadeImage } from '../lib/color'
+import { clientToImagePoint, featherAlpha, hitTestRegions, rasterizePolygon, strokePolygon } from '../lib/geometry'
 
 export default function RoomCanvas({
   image,
@@ -9,13 +8,13 @@ export default function RoomCanvas({
   selections,
   activeRegionId,
   onSelectRegion,
+  materialsById,
 }) {
   const paneRef = useRef(null)
   const canvasRef = useRef(null)
   const compositeRef = useRef(null)
   const baseRef = useRef(null)
   const masksRef = useRef(new Map())
-  const cacheRef = useRef(new Map())
   const hoverRef = useRef(null)
   const selectionsRef = useRef(selections)
   const paintRef = useRef(() => {})
@@ -68,10 +67,10 @@ export default function RoomCanvas({
 
     const masks = new Map()
     for (const region of regions) {
-      masks.set(region.id, rasterizePolygon(image.width, image.height, region.points))
+      const indices = rasterizePolygon(image.width, image.height, region.points)
+      masks.set(region.id, featherAlpha(image.width, image.height, indices, 12))
     }
     masksRef.current = masks
-    cacheRef.current = new Map()
   }, [image, regions])
 
   // Hover only repaints the outline. Recolor runs when selectionKey changes,
@@ -89,9 +88,8 @@ export default function RoomCanvas({
       for (const region of regions) {
         const hovered = region.id === hoverRef.current
         const active = region.id === activeRegionId
-        if (hovered) strokePolygon(ctx, region.points, '#2563eb', 3 * scale)
-        else if (active) strokePolygon(ctx, region.points, '#1d4ed8', 2.5 * scale)
-        else strokePolygon(ctx, region.points, 'rgba(37, 99, 235, 0.4)', 1.5 * scale)
+        if (hovered) strokePolygon(ctx, region.points, '#2563eb', 2.5 * scale)
+        else if (active) strokePolygon(ctx, region.points, 'rgba(29, 78, 216, 0.85)', 2 * scale)
       }
     }
   }, [selections, activeRegionId, regions])
@@ -105,21 +103,15 @@ export default function RoomCanvas({
     for (const region of regions) {
       const materialId = currentSelections[region.id]
       if (!materialId) continue
-      const material = findMaterial(materialId)
-      const indices = masksRef.current.get(region.id)
-      if (!material || !indices || indices.length === 0) continue
-      const cacheKey = `${region.id}:${material.hex}`
-      let recolored = cacheRef.current.get(cacheKey)
-      if (!recolored) {
-        const { h, s } = hexToHueSat(material.hex)
-        recolored = recolorPixels(base, indices, h, s)
-        cacheRef.current.set(cacheKey, recolored)
-      }
-      writeRecoloredPixels(output, recolored)
+      const material = materialsById.get(materialId)
+      const alpha = masksRef.current.get(region.id)
+      if (!material || !alpha) continue
+      const { h, s } = hexToHueSat(material.hex)
+      shadeImage(output, alpha, h, s)
     }
     composite.getContext('2d').putImageData(output, 0, 0)
     paintRef.current()
-  }, [selectionKey, image, regions])
+  }, [selectionKey, image, regions, materialsById])
 
   useEffect(() => {
     paintRef.current()

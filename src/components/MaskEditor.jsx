@@ -1,47 +1,80 @@
 import { useEffect, useRef, useState } from 'react'
-import { regions as savedRegions } from '../data/regions'
+import { useCatalog } from '../hooks/useCatalog'
+import {
+  areaToDraft,
+  createAreaDraft,
+  createOptionDraft,
+  createVariantDraft,
+  toAreaPayload,
+} from '../lib/areaModel'
 import { clientToImagePoint } from '../lib/geometry'
 
-export default function MaskEditor({ image }) {
+const NO_DRAFTS = []
+
+export default function MaskEditor({ image, customAreas, configured, onSave, onDelete, onReload }) {
+  const { drafts, setDrafts } = useCatalog()
   const scrollRef = useRef(null)
   const canvasRef = useRef(null)
-  const textareaRef = useRef(null)
   const readoutRef = useRef(null)
   const draftRef = useRef([])
   const polygonsRef = useRef([])
   const cursorRef = useRef(null)
   const paintRef = useRef(() => {})
   const commitRef = useRef(() => {})
+  const redrawRef = useRef(null)
+  const selectedRef = useRef(null)
+  const zoomModeRef = useRef('fit')
 
   const [draft, setDraft] = useState([])
-  const [polygons, setPolygons] = useState([])
   const [zoom, setZoom] = useState(1)
-  const [exportText, setExportText] = useState('')
-  const [status, setStatus] = useState('')
+  const [selectedId, setSelectedId] = useState(null)
+  const [redrawId, setRedrawId] = useState(null)
   const [pendingFocusId, setPendingFocusId] = useState(null)
+  const [savingId, setSavingId] = useState(null)
+  const [status, setStatus] = useState(null)
+  const polygons = drafts || NO_DRAFTS
+  const editorReady = drafts !== null
 
   useEffect(() => {
+    if (!editorReady) return undefined
     const stage = scrollRef.current
     if (!stage) return undefined
-    const fit = Math.min(stage.clientWidth / image.width, stage.clientHeight / image.height)
-    if (fit > 0 && Number.isFinite(fit)) setZoom(Math.min(1, fit))
-    return undefined
-  }, [image])
+    const fitZoom = () => {
+      if (zoomModeRef.current !== 'fit') return
+      const fit = Math.min(stage.clientWidth / image.width, stage.clientHeight / image.height)
+      if (fit > 0 && Number.isFinite(fit)) setZoom(Math.min(1, fit))
+    }
+    fitZoom()
+    const observer = new ResizeObserver(fitZoom)
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [image, editorReady])
 
   useEffect(() => {
     draftRef.current = draft
     polygonsRef.current = polygons
+    redrawRef.current = redrawId
+    selectedRef.current = selectedId
     commitRef.current = (points) => {
       if (!points || points.length < 3) return
-      const id = crypto.randomUUID()
       const snapshot = points.map((point) => ({ x: point.x, y: point.y }))
-      setPolygons((current) => [
-        ...current,
-        { id, name: `region-${current.length + 1}`, points: snapshot },
-      ])
+      const redrawing = redrawRef.current
+      if (redrawing) {
+        setDrafts((current) =>
+          current.map((polygon) =>
+            polygon.id === redrawing ? { ...polygon, points: snapshot, dirty: true } : polygon,
+          ),
+        )
+        setRedrawId(null)
+        setSelectedId(redrawing)
+      } else {
+        const area = createAreaDraft(snapshot, polygonsRef.current.length + 1)
+        setDrafts((current) => [...current, area])
+        setSelectedId(area.id)
+        setPendingFocusId(area.id)
+      }
       draftRef.current = []
       setDraft([])
-      setPendingFocusId(id)
     }
     paintRef.current = () => {
       const canvas = canvasRef.current
@@ -50,9 +83,20 @@ export default function MaskEditor({ image }) {
       ctx.drawImage(image.source, 0, 0, image.width, image.height)
       const rect = canvas.getBoundingClientRect()
       const scale = rect.width > 0 ? canvas.width / rect.width : 1
+      const activeId = selectedRef.current
+      const hiddenId = redrawRef.current
 
       for (const polygon of polygonsRef.current) {
-        drawPolygon(ctx, polygon.points, 'rgba(37, 99, 235, 0.22)', '#2563eb', 2 * scale, true)
+        if (polygon.id === hiddenId) continue
+        const selected = polygon.id === activeId
+        drawPolygon(
+          ctx,
+          polygon.points,
+          selected ? 'rgba(29, 78, 216, 0.28)' : 'rgba(37, 99, 235, 0.22)',
+          selected ? '#1d4ed8' : '#2563eb',
+          (selected ? 3 : 2) * scale,
+          true,
+        )
         const center = centroid(polygon.points)
         ctx.save()
         ctx.font = `${Math.round(14 * scale)}px system-ui, sans-serif`
@@ -88,19 +132,12 @@ export default function MaskEditor({ image }) {
       }
     }
     paintRef.current()
-  }, [draft, polygons, image, zoom])
-
-  useEffect(() => {
-    if (!exportText) return undefined
-    textareaRef.current?.focus()
-    textareaRef.current?.select()
-    return undefined
-  }, [exportText])
+  }, [draft, polygons, image, zoom, selectedId, redrawId, setDrafts])
 
   useEffect(() => {
     function onKeyDown(event) {
       const tag = event.target.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (event.key === 'Enter') {
         event.preventDefault()
         commitRef.current(draftRef.current)
@@ -112,6 +149,7 @@ export default function MaskEditor({ image }) {
       } else if (event.key === 'Escape') {
         draftRef.current = []
         setDraft([])
+        setRedrawId(null)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -145,51 +183,85 @@ export default function MaskEditor({ image }) {
     if (draftRef.current.length > 0) paintRef.current()
   }
 
-  function renamePolygon(id, name) {
-    setPolygons((current) =>
-      current.map((polygon) => (polygon.id === id ? { ...polygon, name } : polygon)),
+  function updateArea(id, recipe) {
+    setDrafts((current) =>
+      current.map((polygon) => (polygon.id === id ? { ...recipe(polygon), dirty: true } : polygon)),
     )
   }
 
-  function deletePolygon(id) {
-    setPolygons((current) => current.filter((polygon) => polygon.id !== id))
-  }
-
-  function loadSavedRegions() {
-    setPolygons(
-      savedRegions.map((region) => ({
-        id: region.id,
-        name: region.id,
-        points: region.points.map((point) => ({ x: point.x, y: point.y })),
-      })),
-    )
-    draftRef.current = []
-    setDraft([])
-  }
-
-  function clearPolygons() {
-    setPolygons([])
-    draftRef.current = []
-    setDraft([])
-    setExportText('')
-    setStatus('')
-  }
-
-  async function exportJson() {
-    const payload = toExport(polygonsRef.current)
-    const json = JSON.stringify(payload, null, 2)
-    console.log(payload)
-    setExportText(json)
+  async function savePolygon(polygon) {
+    const payload = toAreaPayload(polygon)
+    if (payload.error) {
+      setStatus({ type: 'error', text: payload.error })
+      return
+    }
+    setSavingId(polygon.id)
     try {
-      await navigator.clipboard.writeText(json)
-      setStatus('Copied to the clipboard and printed to the console.')
-    } catch {
-      setStatus('Printed to the console. Copy the JSON from the box below.')
+      const saved = await onSave(payload.value)
+      setDrafts((current) => current.map((item) => (item.id === polygon.id ? areaToDraft(saved) : item)))
+      setStatus({ type: 'ok', text: `Saved "${saved.label}". It can be selected in the configurator.` })
+    } catch (error) {
+      setStatus({ type: 'error', text: error instanceof Error ? error.message : 'Could not save the area.' })
+    } finally {
+      setSavingId(null)
     }
   }
 
+  async function deletePolygon(polygon) {
+    if (polygon.persisted) {
+      const confirmed = window.confirm(
+        `Delete "${polygon.name}"? It will disappear from the configurator.`,
+      )
+      if (!confirmed) return
+      setSavingId(polygon.id)
+      try {
+        await onDelete(polygon.id)
+      } catch (error) {
+        setStatus({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the area.' })
+        setSavingId(null)
+        return
+      }
+      setSavingId(null)
+    }
+    setDrafts((current) => current.filter((item) => item.id !== polygon.id))
+    if (selectedId === polygon.id) setSelectedId(null)
+    if (redrawId === polygon.id) {
+      setRedrawId(null)
+      draftRef.current = []
+      setDraft([])
+    }
+    setStatus({ type: 'ok', text: `Deleted "${polygon.name}".` })
+  }
+
+  function revertLocal() {
+    setDrafts(customAreas.map(areaToDraft))
+    draftRef.current = []
+    setDraft([])
+    setRedrawId(null)
+    setSelectedId(null)
+    setStatus({ type: 'ok', text: 'Reverted to the last saved areas.' })
+  }
+
+  async function reloadSaved() {
+    const dirty = draft.length > 0 || redrawId || polygons.some((polygon) => !polygon.persisted || polygon.dirty)
+    if (dirty) {
+      setStatus({ type: 'error', text: 'Save or revert local changes before reloading.' })
+      return
+    }
+    const areas = await onReload()
+    if (!areas) return
+    setDrafts(areas.map(areaToDraft))
+    setSelectedId(null)
+    setStatus({ type: 'ok', text: 'Reloaded saved areas.' })
+  }
+
+  const selected = polygons.find((polygon) => polygon.id === selectedId) || null
   const displayWidth = Math.round(image.width * zoom)
   const displayHeight = Math.round(image.height * zoom)
+
+  if (!drafts) {
+    return <p className="loading">Loading saved areas…</p>
+  }
 
   return (
     <div className="editor">
@@ -208,81 +280,249 @@ export default function MaskEditor({ image }) {
         <div className="sidebar-block">
           <h2>Mask Editor</h2>
           <p>
-            Click to add points. Double-click or press Enter to close the polygon. Backspace
-            removes the last point. Coordinates are original image pixels.
+            Click the photo to outline an area. Double-click or press Enter to close it. Name the
+            area, then add variants and the options people can choose. Saving stores it in Supabase
+            and adds it to the configurator beside the built-in surfaces.
           </p>
           <p className="readout" ref={readoutRef}>
             Move over the photo
           </p>
           <p className="draft-count">
-            {draft.length === 0 ? 'No polygon in progress.' : `${draft.length} point${draft.length === 1 ? '' : 's'} in progress.`}
+            {redrawId
+              ? 'Redrawing the outline. Double-click to finish, or press Escape to cancel.'
+              : draft.length === 0
+                ? 'No outline in progress.'
+                : `${draft.length} point${draft.length === 1 ? '' : 's'} in progress.`}
           </p>
         </div>
+
+        {!configured ? (
+          <div className="setup-note">
+            <p>Saving needs a Supabase project. Copy <code>.env.example</code> to <code>.env</code> and set:</p>
+            <ul>
+              <li>
+                <code>VITE_SUPABASE_URL</code>
+              </li>
+              <li>
+                <code>VITE_SUPABASE_ANON_KEY</code>
+              </li>
+            </ul>
+            <p>
+              Run <code>supabase/schema.sql</code> in the Supabase SQL editor, then restart the dev
+              server.
+            </p>
+          </div>
+        ) : null}
 
         <div className="editor-toolbar">
           <label>
             Zoom
             <input
               type="range"
-              min="0.1"
+              min="0.05"
               max="3"
               step="0.05"
               value={zoom}
-              onChange={(event) => setZoom(Number(event.target.value))}
+              onChange={(event) => {
+                zoomModeRef.current = 'manual'
+                setZoom(Number(event.target.value))
+              }}
             />
           </label>
           <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" onClick={() => setZoom(1)}>
+          <button
+            type="button"
+            onClick={() => {
+              zoomModeRef.current = 'manual'
+              setZoom(1)
+            }}
+          >
             100%
           </button>
           <button type="button" onClick={() => commitRef.current(draftRef.current)} disabled={draft.length < 3}>
-            Finish polygon
+            Finish outline
           </button>
         </div>
 
         <div className="polygon-list">
-          {polygons.length === 0 ? <p>No finished polygons yet.</p> : null}
-          {polygons.map((polygon) => (
-            <div key={polygon.id} className="polygon-row">
+          {polygons.length === 0 ? <p>No areas yet. Outline one on the photo.</p> : null}
+          {polygons.map((polygon) => {
+            const saved = polygon.persisted && !polygon.dirty
+            return (
+              <div key={polygon.id} className={polygon.id === selectedId ? 'polygon-row selected' : 'polygon-row'}>
+                <button type="button" className="polygon-select" onClick={() => setSelectedId(polygon.id)}>
+                  <span className="polygon-name">{polygon.name}</span>
+                  <span className={saved ? 'polygon-meta saved' : 'polygon-meta unsaved'}>
+                    {saved ? 'Saved' : 'Unsaved'}
+                  </span>
+                </button>
+                <span>{polygon.points.length} pts</span>
+                <button type="button" onClick={() => deletePolygon(polygon)} disabled={savingId === polygon.id}>
+                  Delete
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        {selected ? (
+          <AreaForm
+            key={selected.id}
+            area={selected}
+            saving={savingId === selected.id}
+            configured={configured}
+            redrawing={redrawId === selected.id}
+            autoFocusName={selected.id === pendingFocusId}
+            onChange={(next) => updateArea(selected.id, () => next)}
+            onSave={() => savePolygon(selected)}
+            onRedraw={() => {
+              draftRef.current = []
+              setDraft([])
+              setRedrawId(selected.id)
+              setStatus({ type: 'ok', text: `Redrawing "${selected.name}". The previous outline is hidden until you finish.` })
+            }}
+            onCancelRedraw={() => {
+              draftRef.current = []
+              setDraft([])
+              setRedrawId(null)
+            }}
+          />
+        ) : null}
+
+        <div className="editor-actions">
+          <button type="button" onClick={reloadSaved} disabled={!configured}>
+            Reload saved
+          </button>
+          <button type="button" onClick={revertLocal}>
+            Revert
+          </button>
+        </div>
+        {status ? (
+          <p className={status.type === 'error' ? 'status error' : 'status ok'} role="status">
+            {status.text}
+          </p>
+        ) : null}
+      </aside>
+    </div>
+  )
+}
+
+function AreaForm({
+  area,
+  saving,
+  configured,
+  redrawing,
+  autoFocusName,
+  onChange,
+  onSave,
+  onRedraw,
+  onCancelRedraw,
+}) {
+  function updateVariant(variantId, recipe) {
+    onChange({
+      ...area,
+      variants: area.variants.map((variant) => (variant.id === variantId ? recipe(variant) : variant)),
+    })
+  }
+
+  return (
+    <div className="area-form">
+      <label className="field">
+        <span>Area name</span>
+        <input
+          value={area.name}
+          aria-label="Area name"
+          autoFocus={autoFocusName}
+          onChange={(event) => onChange({ ...area, name: event.target.value })}
+        />
+      </label>
+      <p className="hint">Variants group the choices. Each option is a finish people can apply to this area.</p>
+      {area.variants.map((variant, variantIndex) => (
+        <section key={variant.id} className="variant-card">
+          <div className="variant-head">
+            <label className="field">
+              <span>Variant</span>
               <input
-                value={polygon.name}
-                aria-label="Polygon name"
-                autoFocus={polygon.id === pendingFocusId}
-                onChange={(event) => renamePolygon(polygon.id, event.target.value)}
+                value={variant.name}
+                aria-label={`Variant ${variantIndex + 1} name`}
+                onChange={(event) =>
+                  updateVariant(variant.id, (current) => ({ ...current, name: event.target.value }))
+                }
               />
-              <span>{polygon.points.length} pts</span>
-              <button type="button" onClick={() => deletePolygon(polygon.id)}>
-                Delete
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({ ...area, variants: area.variants.filter((item) => item.id !== variant.id) })
+              }
+            >
+              Remove
+            </button>
+          </div>
+          {variant.options.map((option, optionIndex) => (
+            <div key={option.id} className="option-row">
+              <input
+                type="color"
+                value={option.hex.toLowerCase()}
+                aria-label={`${option.name || 'Option'} color`}
+                onChange={(event) =>
+                  updateVariant(variant.id, (current) => ({
+                    ...current,
+                    options: current.options.map((item) =>
+                      item.id === option.id ? { ...item, hex: event.target.value } : item,
+                    ),
+                  }))
+                }
+              />
+              <input
+                value={option.name}
+                aria-label={`Option ${optionIndex + 1} name`}
+                onChange={(event) =>
+                  updateVariant(variant.id, (current) => ({
+                    ...current,
+                    options: current.options.map((item) =>
+                      item.id === option.id ? { ...item, name: event.target.value } : item,
+                    ),
+                  }))
+                }
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  updateVariant(variant.id, (current) => ({
+                    ...current,
+                    options: current.options.filter((item) => item.id !== option.id),
+                  }))
+                }
+              >
+                Remove
               </button>
             </div>
           ))}
-        </div>
-
-        <div className="editor-actions">
-          <button type="button" onClick={loadSavedRegions}>
-            Load regions.ts
+          <button
+            type="button"
+            onClick={() =>
+              updateVariant(variant.id, (current) => ({
+                ...current,
+                options: [...current.options, createOptionDraft(current.options.length + 1)],
+              }))
+            }
+          >
+            Add option
           </button>
-          <button type="button" onClick={clearPolygons}>
-            Clear
-          </button>
-          <button type="button" onClick={exportJson} disabled={polygons.length === 0}>
-            Export JSON
-          </button>
-        </div>
-        {status ? <p className="status">{status}</p> : null}
-        <p className="hint">
-          Paste into <code>src/data/regions.ts</code>. Map <code>name</code> to <code>label</code> and
-          add <code>categoryId</code> (<code>kitchen-slab</code>, <code>cabinet-finish</code>,{" "}
-          <code>chimney-cover</code>, or <code>drawer-finish</code>).
-        </p>
-        <textarea
-          ref={textareaRef}
-          readOnly
-          value={exportText}
-          placeholder="Export JSON appears here."
-          spellCheck="false"
-        />
-      </aside>
+        </section>
+      ))}
+      <div className="area-form-actions">
+        <button type="button" onClick={() => onChange({ ...area, variants: [...area.variants, createVariantDraft(area.variants.length + 1)] })}>
+          Add variant
+        </button>
+        <button type="button" onClick={redrawing ? onCancelRedraw : onRedraw} disabled={!redrawing && saving}>
+          {redrawing ? 'Cancel redraw' : 'Redraw outline'}
+        </button>
+        <button type="button" className="button-primary" onClick={onSave} disabled={!configured || saving || redrawing}>
+          {saving ? 'Saving…' : area.persisted ? 'Update area' : 'Save area'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -313,34 +553,4 @@ function centroid(points) {
     y += point.y
   }
   return { x: x / points.length, y: y / points.length }
-}
-
-function toExport(polygons) {
-  const used = new Set()
-  return polygons.map((polygon, index) => {
-    const base = slug(polygon.name) || `region-${index + 1}`
-    let id = base
-    let suffix = 2
-    while (used.has(id)) {
-      id = `${base}-${suffix}`
-      suffix += 1
-    }
-    used.add(id)
-    return {
-      id,
-      name: polygon.name,
-      points: polygon.points.map((point) => ({
-        x: Math.round(point.x),
-        y: Math.round(point.y),
-      })),
-    }
-  })
-}
-
-function slug(name) {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
 }

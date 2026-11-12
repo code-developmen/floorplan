@@ -1,16 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import MaterialPanel from './components/MaterialPanel'
 import MaskEditor from './components/MaskEditor'
 import RoomCanvas from './components/RoomCanvas'
-import { regions } from './data/regions'
+import { useCatalog } from './hooks/useCatalog'
 import { useRegionSelection } from './hooks/useRegionSelection'
+import { buildMaterialMap, categoryForRegion, regionsWithCustom } from './lib/areaModel'
 import { loadRoomImage } from './lib/loadRoomImage'
 import './App.css'
 
 export default function App() {
   const [mode, setMode] = useState('configurator')
   const [image, setImage] = useState(null)
-  const { selections, activeRegionId, selectRegion, applyMaterial, resetAll } = useRegionSelection()
+  const { selections, activeRegionId, selectRegion, applyMaterial, clearRegion, resetAll } =
+    useRegionSelection()
+  const {
+    customAreas,
+    ready,
+    configured,
+    error,
+    load,
+    ensureDrafts,
+    saveCustomArea,
+    removeCustomArea,
+  } = useCatalog()
 
   useEffect(() => {
     let cancelled = false
@@ -22,7 +34,25 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    load()
+  }, [load])
+
+  useEffect(() => {
+    if (ready) ensureDrafts(customAreas)
+  }, [ready, customAreas, ensureDrafts])
+
+  const regions = useMemo(() => regionsWithCustom(customAreas), [customAreas])
+  const materialsById = useMemo(() => buildMaterialMap(customAreas), [customAreas])
   const activeRegion = regions.find((region) => region.id === activeRegionId) || null
+  const activeCategory = categoryForRegion(activeRegion, customAreas)
+  const appliedId = activeRegion ? selections[activeRegion.id] : null
+  const applied = appliedId ? materialsById.get(appliedId) || null : null
+
+  async function handleDeleteArea(id) {
+    await removeCustomArea(id)
+    clearRegion(id)
+  }
 
   return (
     <div className="app">
@@ -51,6 +81,7 @@ export default function App() {
           reload.
         </p>
       ) : null}
+      {error ? <p className="banner">{error}</p> : null}
       {!image ? (
         <p className="loading">Loading photo…</p>
       ) : mode === 'configurator' ? (
@@ -61,15 +92,24 @@ export default function App() {
             selections={selections}
             activeRegionId={activeRegionId}
             onSelectRegion={selectRegion}
+            materialsById={materialsById}
           />
           <MaterialPanel
             region={activeRegion}
-            selectionId={activeRegion ? selections[activeRegion.id] : null}
+            category={activeCategory}
+            applied={applied}
             onApply={applyMaterial}
           />
         </div>
       ) : (
-        <MaskEditor image={image} />
+        <MaskEditor
+          image={image}
+          customAreas={customAreas}
+          configured={configured}
+          onSave={saveCustomArea}
+          onDelete={handleDeleteArea}
+          onReload={load}
+        />
       )}
     </div>
   )

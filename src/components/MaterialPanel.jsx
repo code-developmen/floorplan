@@ -1,19 +1,15 @@
-import { findCategory, findMaterial } from '../data/materials'
-
-export default function MaterialPanel({ region, selectionId, onApply }) {
+export default function MaterialPanel({ region, category, applied, onApply }) {
   if (!region) {
     return (
       <aside className="sidebar">
         <div className="sidebar-block">
           <h2>Finishes</h2>
-          <p>Tap or click a surface, then pick a color.</p>
+          <p>Tap or click a surface, then pick a finish.</p>
         </div>
       </aside>
     )
   }
 
-  const category = findCategory(region.categoryId)
-  const applied = selectionId ? findMaterial(selectionId) : null
   const groups = category ? groupByBrand(category.options) : []
 
   return (
@@ -25,12 +21,17 @@ export default function MaterialPanel({ region, selectionId, onApply }) {
           {applied ? `Applied: ${applied.brand} ${applied.name}` : 'No finish applied yet.'}
         </p>
       </div>
+      {groups.length === 0 ? (
+        <div className="sidebar-block">
+          <p>No options yet. Open Mask Editor, add a variant and an option, then save.</p>
+        </div>
+      ) : null}
       {groups.map((group) => (
         <section key={group.brand} className="brand-group">
           <h3>{group.brand}</h3>
           <div className="swatch-grid">
             {group.options.map((option) => {
-              const selected = option.id === selectionId
+              const selected = option.id === applied?.id
               return (
                 <button
                   key={option.id}

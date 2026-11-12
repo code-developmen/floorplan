@@ -7,57 +7,6 @@ export interface Region {
 
 /** categoryId must match an id in src/data/materials.ts. */
 export const regions: Region[] = [
-  // {
-  //   "id": "kitchen-slab",
-  //   "label": "Kitchen Slab",
-  //   "categoryId": "kitchen-slab",
-  //   "points": [
-  //     {
-  //       "x": 1585,
-  //       "y": 1580
-  //     },
-  //     {
-  //       "x": 1116,
-  //       "y": 1550
-  //     },
-  //     {
-  //       "x": 1237,
-  //       "y": 1407
-  //     },
-  //     {
-  //       "x": 312,
-  //       "y": 1380
-  //     },
-  //     {
-  //       "x": 12,
-  //       "y": 1428
-  //     },
-  //     {
-  //       "x": 9,
-  //       "y": 1383
-  //     },
-  //     {
-  //       "x": 88,
-  //       "y": 1395
-  //     },
-  //     {
-  //       "x": 281,
-  //       "y": 1359
-  //     },
-  //     {
-  //       "x": 387,
-  //       "y": 1350
-  //     },
-  //     {
-  //       "x": 1512,
-  //       "y": 1374
-  //     },
-  //     {
-  //       "x": 1582,
-  //       "y": 1580
-  //     }
-  //   ]
-  // },
   {
     "id": "right-cabinet",
     "label": "Right Cabinet",

@@ -2,7 +2,7 @@ export interface MaterialOption {
   id: string;
   brand: string;
   name: string;
-  hex: string; // for flat-color/luminosity recolor mode
+  hex: string; // swatch color, applied as a light shade over the photo
 }
 
 export interface Category {
